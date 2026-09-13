@@ -1,0 +1,9 @@
+[project]
+name = "redis-string-demo"
+version = "0.1.0"
+description = "Redis String 基础学习 Demo"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "redis>=5.0,<7.0",
+]
