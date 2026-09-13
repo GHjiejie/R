@@ -2,7 +2,7 @@
 
 ## Demo 目的
 
-使用 Docker Compose 在本机启动一个 Redis 7 实例，并通过 `redis-cli` 完成第一次连接和常用数据结构操作。
+使用 Docker Compose 在本机启动一个 Redis 7 实例和 RedisInsight 可视化界面，并通过 `redis-cli` 完成第一次连接和常用数据结构操作。
 
 ## 涉及的 Redis 知识点
 
@@ -12,12 +12,13 @@
 - Hash：`HSET`、`HGETALL`
 - Set：`SADD`、`SMEMBERS`
 - 过期策略：`SETEX`、`TTL`
+- RedisInsight：浏览、编辑和查询 Redis 数据
 
 ## 目录或关键文件说明
 
 ```text
 demo-install-redis/
-├── docker-compose.yml          # Redis 7 服务和数据卷配置
+├── docker-compose.yml          # Redis 7、RedisInsight 服务和数据卷配置
 ├── scripts/
 │   └── basic-commands.sh       # 自动执行一组基础命令
 └── README.md
@@ -65,6 +66,20 @@ OK
 127.0.0.1:6379> exit
 ```
 
+启动后可以打开 RedisInsight：
+
+[http://localhost:5540](http://localhost:5540)
+
+在 RedisInsight 中新增连接时填写：
+
+- Host：`redis`
+- Port：`6379`
+- Username：留空
+- Password：留空
+- Database：`0`
+
+RedisInsight 和 Redis 在同一个 Compose 网络中，因此使用服务名 `redis` 连接，而不是 `localhost`。RedisInsight 的配置会保存到 `redisinsight-data` 数据卷中。
+
 ### 方式二：本机 Redis
 
 如果 Redis 是通过 Homebrew 或 APT 运行的，直接执行：
@@ -94,7 +109,7 @@ docker compose exec redis redis-cli GET demo:install:temporary
 docker compose down
 ```
 
-连同本 demo 创建的数据卷一起删除（仅作用于当前 Compose 项目）：
+连同本 demo 创建的 Redis 和 RedisInsight 数据卷一起删除（仅作用于当前 Compose 项目）：
 
 ```bash
 docker compose down -v
