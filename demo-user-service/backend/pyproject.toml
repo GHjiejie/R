@@ -1,0 +1,18 @@
+[project]
+name = "demo-user-service-backend"
+version = "0.2.0"
+description = "FastAPI 用户服务：PostgreSQL 直连 vs Redis 缓存 对比演示"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "sqlalchemy==2.0.36",
+    "psycopg2-binary==2.9.10",
+    "redis==5.2.1",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.0",
+    "email-validator==2.2.0",
+]
+
+[tool.uv]
+package = false

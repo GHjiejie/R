@@ -25,7 +25,8 @@ Cache-Aside 模式在大数据量场景下的价值。
 demo-user-service/
 ├── docker-compose.yml        # PostgreSQL + Redis 一键启动
 ├── backend/                  # FastAPI 后端
-│   ├── requirements.txt
+│   ├── pyproject.toml        # uv 项目与依赖定义
+│   ├── uv.lock               # uv 锁定版本
 │   ├── .env.example          # 示例配置（无真实密码）
 │   └── app/
 │       ├── main.py           # API 路由（含缓存逻辑）
@@ -44,7 +45,7 @@ demo-user-service/
 ## 运行前置条件
 
 - Docker 与 Docker Compose（启动 PostgreSQL / Redis）
-- Python 3.11+（建议用 `uv` 或 venv 创建虚拟环境）
+- Python 3.11+ 与 [uv](https://docs.astral.sh/uv/)（`pip install uv` 或 `brew install uv`）
 - Node.js 18+
 
 ## 启动方式
@@ -54,12 +55,11 @@ demo-user-service/
 cd demo-user-service
 docker compose up -d
 
-# 2. 启动后端（虚拟环境安装依赖）
+# 2. 启动后端（uv 自动创建虚拟环境并安装依赖）
 cd backend
-uv venv .venv && source .venv/bin/activate
-uv pip install -r requirements.txt
+uv sync                 # 按 pyproject.toml + uv.lock 安装依赖
 cp .env.example .env
-uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:app --reload --port 8000
 
 # 3. 启动前端（新开终端）
 cd frontend
@@ -90,7 +90,7 @@ npm run dev        # http://localhost:5173
 
 ```bash
 docker compose down -v          # 停止并删除容器与数据卷
-rm -rf backend/.venv frontend/node_modules
+uv venv --clear       # 或手动删除 backend/.venv 与 frontend/node_modules
 ```
 
 ## 常见问题
