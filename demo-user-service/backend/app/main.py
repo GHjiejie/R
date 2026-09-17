@@ -6,19 +6,20 @@
 
 启动时自动向数据库写入种子数据（默认 10000 条），模拟大数据量场景。
 """
+
 import random
 import time
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
+from . import cache
 from .database import Base, engine, get_db
 from .models import User
 from .schemas import UserCreate, UserOut
-from . import cache
 
 Base.metadata.create_all(bind=engine)
 
@@ -32,8 +33,42 @@ app.add_middleware(
 )
 
 SEED_COUNT = 10000
-_first_names = ["伟", "芳", "娜", "敏", "静", "磊", "洋", "勇", "杰", "涛", "明", "超", "秀英", "霞", "平", "刚"]
-_last_names = ["王", "李", "张", "刘", "陈", "杨", "赵", "黄", "周", "吴", "徐", "孙", "胡", "朱", "高", "林"]
+_first_names = [
+    "伟",
+    "芳",
+    "娜",
+    "敏",
+    "静",
+    "磊",
+    "洋",
+    "勇",
+    "杰",
+    "涛",
+    "明",
+    "超",
+    "秀英",
+    "霞",
+    "平",
+    "刚",
+]
+_last_names = [
+    "王",
+    "李",
+    "张",
+    "刘",
+    "陈",
+    "杨",
+    "赵",
+    "黄",
+    "周",
+    "吴",
+    "徐",
+    "孙",
+    "胡",
+    "朱",
+    "高",
+    "林",
+]
 
 
 @app.on_event("startup")
@@ -46,10 +81,12 @@ def seed_data():
             return
         batch = []
         for i in range(1, SEED_COUNT + 1):
-            batch.append(User(
-                name=random.choice(_last_names) + random.choice(_first_names),
-                email=f"user{i}@example.com",
-            ))
+            batch.append(
+                User(
+                    name=random.choice(_last_names) + random.choice(_first_names),
+                    email=f"user{i}@example.com",
+                )
+            )
             if i % 1000 == 0:
                 db.bulk_save_objects(batch)
                 db.commit()
@@ -88,6 +125,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
 
 # ---------- 接口一：直接访问数据库 ----------
 
+
 @app.get("/users/db/{user_id}")
 def get_user_from_db(user_id: int):
     t0 = time.perf_counter()
@@ -107,6 +145,7 @@ def get_user_from_db(user_id: int):
 
 
 # ---------- 接口二：从 Redis 缓存获取 ----------
+
 
 @app.get("/users/cache/{user_id}")
 def get_user_from_cache(user_id: int):
@@ -128,7 +167,11 @@ def get_user_from_cache(user_id: int):
         # 3. 回填缓存
         cache.set_cached_user(user_id, user_dict)
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
-        return {"source": "postgresql (cache miss, 已回填)", "elapsed_ms": elapsed_ms, "user": user_dict}
+        return {
+            "source": "postgresql (cache miss, 已回填)",
+            "elapsed_ms": elapsed_ms,
+            "user": user_dict,
+        }
     finally:
         db.close()
 

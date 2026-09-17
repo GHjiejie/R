@@ -1,9 +1,19 @@
 [project]
-name = "redis-string-demo"
+name = "redis-learning"
 version = "0.1.0"
-description = "Redis String 基础学习 Demo"
+description = "Redis 学习项目：基础命令与各主题 demo"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "redis>=5.0,<7.0",
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.34.0",
+    "sqlalchemy==2.0.36",
+    "psycopg2-binary==2.9.10",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.0",
+    "email-validator==2.2.0",
 ]
+
+[tool.uv]
+package = false

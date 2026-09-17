@@ -1,5 +1,6 @@
 """SQLAlchemy ORM 模型：用户表。"""
-from sqlalchemy import Column, Integer, String, DateTime, func
+
+from sqlalchemy import Column, DateTime, Integer, String, func
 
 from .database import Base
 

@@ -4,6 +4,7 @@
 策略：Cache-Aside（读：先缓存后回源；写：先写库再删缓存）
 """
 import json
+
 import redis
 
 from .config import settings
