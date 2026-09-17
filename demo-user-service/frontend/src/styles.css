@@ -48,3 +48,13 @@ pre {
 .source { font-size: 13px; color: #646a73; }
 .empty { color: #8f959e; font-size: 14px; }
 .log { font-size: 13px; color: #444; padding-left: 18px; }
+
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
+.card.warn { border-color: #e6a23c; }
+.alert { font-size: 13px; color: #c0392b; }
+.ok { font-size: 13px; color: #2e7d32; }
+.report { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+.report th, .report td { border: 1px solid #dee0e3; padding: 8px 10px; text-align: left; }
+.report th { background: #f7f8fa; }
+.bad { color: #c0392b; }
+.good { color: #2e7d32; }

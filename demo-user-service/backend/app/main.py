@@ -1,8 +1,9 @@
 """FastAPI 入口：用户服务 API（数据量加大版）。
 
-演示两组接口的对比：
-- GET /users/db/{id}    -> 直接查 PostgreSQL，不走缓存
-- GET /users/cache/{id} -> 先查 Redis，未命中回源并回填缓存（Cache-Aside）
+演示三组接口的对比：
+- GET /users/db/{id}           -> 直接查 PostgreSQL，不走缓存
+- GET /users/cache-unsafe/{id} -> 缓存未命中且用户不存在时每次回源（无穿透防护）
+- GET /users/cache/{id}        -> Cache-Aside + 空值缓存（防缓存穿透）
 
 启动时自动向数据库写入种子数据（默认 10000 条），模拟大数据量场景。
 """
@@ -23,7 +24,7 @@ from .schemas import UserCreate, UserOut
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="User Service - DB vs Redis Cache", version="0.2.0")
+app = FastAPI(title="User Service - DB vs Redis Cache", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -119,6 +120,7 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="email 已存在")
     db.refresh(user)
     user_dict = {"id": user.id, "name": user.name, "email": user.email}
+    # 写库后用真实数据覆盖（可能存在的）空值缓存，保证一致性
     cache.set_cached_user(user.id, user_dict)
     return user_dict
 
@@ -144,7 +146,44 @@ def get_user_from_db(user_id: int):
         db.close()
 
 
-# ---------- 接口二：从 Redis 缓存获取 ----------
+# ---------- 接口二：缓存，但不做缓存穿透防护（对照组） ----------
+
+
+@app.get("/users/cache-unsafe/{user_id}")
+def get_user_from_cache_unsafe(user_id: int):
+    t0 = time.perf_counter()
+
+    cached = cache.get_cached_user(user_id)
+    if isinstance(cached, dict):
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return {"source": "redis (hit)", "elapsed_ms": elapsed_ms, "user": cached}
+
+    # 未命中直接回源；用户不存在时既不写缓存也不拦截，下次请求仍会打库
+    db = next(get_db())
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+            return {
+                "source": "postgresql (缓存穿透：未命中且用户不存在，未写空值缓存)",
+                "elapsed_ms": elapsed_ms,
+                "user": None,
+                "db_hit": True,
+                "message": "用户不存在，且未做穿透防护，每次请求都会打到数据库",
+            }
+        user_dict = {"id": user.id, "name": user.name, "email": user.email}
+        cache.set_cached_user(user_id, user_dict)
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return {
+            "source": "postgresql (cache miss, 已回填)",
+            "elapsed_ms": elapsed_ms,
+            "user": user_dict,
+        }
+    finally:
+        db.close()
+
+
+# ---------- 接口三：缓存 + 空值缓存（防缓存穿透） ----------
 
 
 @app.get("/users/cache/{user_id}")
@@ -153,18 +192,37 @@ def get_user_from_cache(user_id: int):
 
     # 1. 先查 Redis
     cached = cache.get_cached_user(user_id)
-    if cached:
+    if isinstance(cached, dict):
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
         return {"source": "redis (hit)", "elapsed_ms": elapsed_ms, "user": cached}
+    if cached == cache.NULL_CACHE_VALUE:
+        # 命中空值缓存：已知用户不存在，直接返回，不回源数据库
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+        return {
+            "source": "redis (null cache hit, 空值缓存命中)",
+            "elapsed_ms": elapsed_ms,
+            "user": None,
+            "db_hit": False,
+            "message": "用户不存在（空值缓存拦截，未访问数据库）",
+        }
 
     # 2. 未命中，回源 PostgreSQL
     db = next(get_db())
     try:
         user = db.get(User, user_id)
         if not user:
-            raise HTTPException(status_code=404, detail="用户不存在")
+            # 3a. 用户不存在：写入短 TTL 的空值缓存，防止缓存穿透
+            cache.set_null_cache(user_id)
+            elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+            return {
+                "source": "postgresql (用户不存在，已写入空值缓存)",
+                "elapsed_ms": elapsed_ms,
+                "user": None,
+                "db_hit": True,
+                "message": f"用户不存在，已写入空值缓存（TTL {cache.settings.NULL_CACHE_TTL}s），后续请求不再打库",
+            }
         user_dict = {"id": user.id, "name": user.name, "email": user.email}
-        # 3. 回填缓存
+        # 3b. 回填缓存
         cache.set_cached_user(user_id, user_dict)
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
         return {
