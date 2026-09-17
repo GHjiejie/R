@@ -19,6 +19,9 @@ export default function App() {
   const [attackRunning, setAttackRunning] = useState(false)
   const [attackReport, setAttackReport] = useState(null)
   const [log, setLog] = useState([])
+  const [avalancheRunning, setAvalancheRunning] = useState(false)
+  const [ttlDist, setTtlDist] = useState(null)
+  const [avalancheMode, setAvalancheMode] = useState(null)
 
   const addLog = (msg) => setLog((l) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...l.slice(0, 19)])
 
@@ -71,6 +74,29 @@ export default function App() {
     } finally {
       setAttackRunning(false)
     }
+  }
+
+  async function runAvalanche(jitter) {
+    setAvalancheRunning(true)
+    setAvalancheMode(jitter ? 'safe' : 'danger')
+    try {
+      const warm = await fetch(`${API}/cache/warm-batch?start=1&end=200&jitter=${jitter}`, { method: 'POST' }).then(r => r.json())
+      const dist = await fetch(`${API}/cache/ttl-distribution`).then(r => r.json())
+      setTtlDist(dist)
+      addLog(
+        `雪崩演示（${jitter ? '错峰 TTL ✅' : '统一 TTL ⚠️'}）：预热 ${warm.warmed} 个键，` +
+        `TTL 范围 ${warm.ttl_min}~${warm.ttl_max}s，共 ${dist.total_keys} 个键`
+      )
+    } finally {
+      setAvalancheRunning(false)
+    }
+  }
+
+  async function clearCache() {
+    const res = await fetch(`${API}/cache/all`, { method: 'DELETE' }).then(r => r.json())
+    setTtlDist(null)
+    setAvalancheMode(null)
+    addLog(`已清空 ${res.deleted} 个缓存键`)
   }
 
   return (
@@ -164,6 +190,42 @@ export default function App() {
               </tr>
             </tbody>
           </table>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>缓存雪崩演示（TTL 分布）</h2>
+        <p className="hint">
+          批量预热 200 个用户的缓存后查看 TTL 分布：<b>统一 TTL</b> 会让所有键同时过期（雪崩诱因），
+          <b>错峰 TTL</b> 在基础 TTL 上叠加随机扰动，让过期时间点散开。
+        </p>
+        <div className="row">
+          <button className="danger" onClick={() => runAvalanche(false)} disabled={avalancheRunning}>
+            模拟雪崩（统一 TTL）
+          </button>
+          <button className="success" onClick={() => runAvalanche(true)} disabled={avalancheRunning}>
+            防雪崩预热（错峰 TTL）
+          </button>
+          <button className="secondary" onClick={clearCache}>清空缓存</button>
+        </div>
+        {ttlDist && (
+          <>
+            <p className={avalancheMode === 'danger' ? 'alert' : 'ok'}>
+              当前 {ttlDist.total_keys} 个键 | 模式：{avalancheMode === 'danger' ? '统一 TTL，所有键将同时过期 ⚠️' : '错峰 TTL，过期时间已散开 ✅'}
+            </p>
+            <div className="ttl-chart">
+              {Object.entries(ttlDist.ttl_distribution).map(([ttl, count]) => (
+                <div key={ttl} className="ttl-bar-row">
+                  <span className="ttl-label">{ttl}s</span>
+                  <div
+                    className={`ttl-bar ${avalancheMode === 'danger' ? 'danger' : ''}`}
+                    style={{ width: `${Math.max(2, (count / ttlDist.total_keys) * 100)}%` }}
+                  />
+                  <span className="ttl-count">{count}</span>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </section>
 

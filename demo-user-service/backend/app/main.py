@@ -3,7 +3,11 @@
 演示三组接口的对比：
 - GET /users/db/{id}           -> 直接查 PostgreSQL，不走缓存
 - GET /users/cache-unsafe/{id} -> 缓存未命中且用户不存在时每次回源（无穿透防护）
-- GET /users/cache/{id}        -> Cache-Aside + 空值缓存（防缓存穿透）
+- GET /users/cache/{id}        -> Cache-Aside + 空值缓存（防穿透）+ TTL 抖动（防雪崩）
+
+缓存雪崩防护：写入缓存时在基础 TTL 上叠加随机扰动，让大量键错峰过期；
+另提供 POST /cache/warm-batch?jitter=false 的"统一 TTL"对照模式，
+以及 GET /cache/ttl-distribution 观察 TTL 分布差异。
 
 启动时自动向数据库写入种子数据（默认 10000 条），模拟大数据量场景。
 """
@@ -24,7 +28,7 @@ from .schemas import UserCreate, UserOut
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="User Service - DB vs Redis Cache", version="0.3.0")
+app = FastAPI(title="User Service - DB vs Redis Cache", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -232,6 +236,72 @@ def get_user_from_cache(user_id: int):
         }
     finally:
         db.close()
+
+
+# ---------- 缓存雪崩演示：批量预热 + TTL 分布 ----------
+
+
+@app.post("/cache/warm-batch")
+def warm_batch(start: int = 1, end: int = 200, jitter: bool = True, db: Session = Depends(get_db)):
+    """批量预热 [start, end] 范围内的用户缓存。
+
+    jitter=true（默认）：每个键的 TTL = CACHE_TTL + 随机扰动，错峰过期（防雪崩）。
+    jitter=false：所有键使用统一 TTL，同时过期（雪崩对照组，危险！仅演示）。
+    """
+    if end < start or end - start > 5000:
+        raise HTTPException(status_code=400, detail="范围不合法：end >= start 且跨度不超过 5000")
+    users = db.query(User).filter(User.id >= start, User.id <= end).all()
+    ttls = []
+    for u in users:
+        ttl = cache.set_cached_user(
+            u.id, {"id": u.id, "name": u.name, "email": u.email}, jitter=jitter
+        )
+        ttls.append(ttl)
+    return {
+        "warmed": len(users),
+        "jitter": jitter,
+        "ttl_min": min(ttls) if ttls else None,
+        "ttl_max": max(ttls) if ttls else None,
+        "note": "jitter=false 时所有键同时过期，是缓存雪崩的典型诱因"
+        if not jitter
+        else "TTL 已加随机扰动，键将错峰过期",
+    }
+
+
+@app.get("/cache/ttl-distribution")
+def ttl_distribution(limit: int = 2000):
+    """统计当前 user:* 缓存键的 TTL 分布（每秒一个桶），用于观察雪崩风险。"""
+    cursor = 0
+    buckets = {}
+    scanned = 0
+    while True:
+        cursor, keys = cache.redis_client.scan(cursor=cursor, match="user:*", count=500)
+        for k in keys:
+            ttl = cache.redis_client.ttl(k)
+            if ttl > 0:
+                buckets[ttl] = buckets.get(ttl, 0) + 1
+        scanned += len(keys)
+        if cursor == 0 or scanned >= limit:
+            break
+    return {
+        "total_keys": sum(buckets.values()),
+        "ttl_distribution": {str(k): buckets[k] for k in sorted(buckets)},
+        "note": "若大量键集中在同一 TTL 桶，它们将同时过期，存在雪崩风险",
+    }
+
+
+@app.delete("/cache/all")
+def clear_user_cache():
+    """清空所有 user:* 缓存键（演示前后重置用）。"""
+    cursor = 0
+    deleted = 0
+    while True:
+        cursor, keys = cache.redis_client.scan(cursor=cursor, match="user:*", count=500)
+        if keys:
+            deleted += cache.redis_client.delete(*keys)
+        if cursor == 0:
+            break
+    return {"deleted": deleted}
 
 
 @app.delete("/users/{user_id}", status_code=204)

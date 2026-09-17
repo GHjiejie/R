@@ -58,3 +58,13 @@ pre {
 .report th { background: #f7f8fa; }
 .bad { color: #c0392b; }
 .good { color: #2e7d32; }
+
+button.danger { background: #c0392b; }
+button.success { background: #2e7d32; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.ttl-chart { margin-top: 8px; }
+.ttl-bar-row { display: flex; align-items: center; gap: 8px; margin: 2px 0; font-size: 12px; }
+.ttl-label { width: 40px; text-align: right; color: #646a73; }
+.ttl-bar { height: 12px; background: #3370ff; border-radius: 2px; min-width: 2px; }
+.ttl-bar.danger { background: #c0392b; }
+.ttl-count { color: #444; }

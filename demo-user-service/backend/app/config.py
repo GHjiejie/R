@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     CACHE_TTL: int = 60
     NULL_CACHE_TTL: int = 30  # 空值缓存 TTL（防缓存穿透），建议短于正常缓存
+    CACHE_TTL_JITTER: int = 30  # TTL 随机扰动上限（秒，防缓存雪崩：错峰过期）
 
     class Config:
         env_file = ".env"

@@ -5,7 +5,8 @@
 搭建一个全栈用户服务（含 **10000 条种子数据**），通过三个并列接口直观对比
 **直接查 PostgreSQL**、**走 Redis 缓存（无防护）** 与
 **走 Redis 缓存 + 空值缓存（防穿透）** 的响应差异，演示
-Cache-Aside 模式与缓存穿透防护（Cache Null）在大数据量场景下的价值。
+Cache-Aside 模式、缓存穿透防护（Cache Null）与缓存雪崩防护（TTL 抖动）
+在大数据量场景下的价值。
 
 ## 系统架构设计图
 
@@ -18,6 +19,10 @@ Cache-Aside 模式与缓存穿透防护（Cache Null）在大数据量场景下�
   （TTL 较短，默认 30 秒），后续请求命中空值缓存直接返回，不再打到数据库
 - **缓存写策略**：写库后 `SETEX` 预热（同时覆盖可能存在的空值缓存）；删库后 `DEL` 失效，保证最终一致
 - **过期时间（TTL）**：正常缓存键 `user:{id}` 默认 60 秒；空值缓存默认 30 秒（`NULL_CACHE_TTL`）
+- **缓存雪崩防护（TTL 随机扰动 / Jitter）**：写入缓存时在基础 TTL 上叠加
+  `[0, CACHE_TTL_JITTER]` 秒随机值（默认 0~30 秒），让大量键错峰过期，
+  避免同时失效引发数据库瞬时压力；`/cache/warm-batch?jitter=false`
+  提供"统一 TTL"对照模式，配合 `/cache/ttl-distribution` 可直观看到分布差异
 - **数据一致性**：先更新数据库再删除缓存
 - **键命名规范**：`user:{id}` 冒号分隔的层级命名
 - **性能对比**：同一数据分别走"直连数据库"与"Redis 缓存"两条路径，量化延迟差异
@@ -123,9 +128,16 @@ npm run dev        # http://localhost:5173
    > TTL user:999999     # 空值缓存 TTL（默认 30 秒）
    ```
 
-5. 后端 API 文档：`http://localhost:8000/docs`（Swagger UI），其中
+5. **缓存雪崩演示**：在"缓存雪崩演示"区域点击 **"模拟雪崩（统一 TTL）"** 或
+   **"防雪崩预热（错峰 TTL）"**，批量预热 200 个用户缓存后，页面用条形图展示
+   当前 `user:*` 键的 TTL 分布：
+   - 统一 TTL：所有键集中在一个 TTL 桶，将同时过期（雪崩诱因）。
+   - 错峰 TTL：键散落在 60~90 秒的多个桶中，过期时间点被拉开。
+6. 后端 API 文档：`http://localhost:8000/docs`（Swagger UI），其中
    `/users/db/{id}`、`/users/cache-unsafe/{id}` 与 `/users/cache/{id}`
-   分别对应"直连数据库"、"缓存无防护"与"缓存 + 防穿透"三条路径。
+   分别对应"直连数据库"、"缓存无防护"与"缓存 + 防穿透"三条路径；
+   `/cache/warm-batch`、`/cache/ttl-distribution`、`/cache/all`
+   用于雪崩演示与缓存重置。
 
 ## 清理方式
 
@@ -146,5 +158,8 @@ rm -rf frontend/node_modules .logs  # 清理前端依赖与日志（Python 依�
   返回 200 + `user: null`（演示用，便于观察 `db_hit` 字段）；如需严格 REST 语义可改回 404。
 - **空值缓存期间创建同 ID 用户**：`POST /users` 会用真实数据 `SETEX` 覆盖空值缓存；
   若空值缓存 TTL 内出现脏读，可调小 `NULL_CACHE_TTL`。
+- **TTL 抖动带来的副作用**：键的实际过期时间不再固定，而是
+  `[CACHE_TTL, CACHE_TTL + CACHE_TTL_JITTER]` 区间内的随机值；
+  对过期精度要求极高的场景应调小或关闭抖动（`CACHE_TTL_JITTER=0`）。
 - **前端跨域报错**：开发环境通过 Vite 的 `/api` 代理转发，请勿直接请求
   `http://localhost:8000`。
