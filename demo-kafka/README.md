@@ -45,7 +45,19 @@ Kafka 的核心特点是：消息先写入 Broker 的磁盘日志，并在 Topic
 
 ```text
 demo-kafka/
+├── Makefile             # Kafka 启动、Topic、生产者、消费者等快捷命令
+├── backend/
+│   ├── __init__.py       # FastAPI 后端包标记
+│   └── main.py           # HTTP 接口和 Kafka 读写逻辑
 ├── docker-compose.yml  # 启动单节点 Kafka（KRaft）
+├── frontend/
+│   ├── package.json      # React/Vite 前端依赖和脚本
+│   ├── vite.config.js    # Vite 开发服务器和 FastAPI 代理
+│   ├── index.html
+│   └── src/
+│       ├── App.jsx       # Kafka 消息控制台页面
+│       ├── main.jsx
+│       └── styles.css
 ├── producer.py         # 发送一条文本消息
 ├── consumer.py         # 读取并打印一条消息
 └── README.md           # 概念介绍和运行说明
@@ -57,11 +69,115 @@ demo-kafka/
 
 - 已安装并启动 Docker Desktop（或 Docker Engine + Compose v2）。
 - 已安装 `uv`。
+- 如果运行 React 页面，另外需要安装 Node.js 和 npm。
 - 当前终端位于项目根目录 `/Users/zhengjie/Github/R`，或者后续命令中的路径使用实际项目路径。
 
 ## 启动或运行方式
 
-### 1. 启动 Kafka
+### 使用 Makefile（推荐）
+
+在 `demo-kafka` 目录执行：
+
+```bash
+make setup
+```
+
+`make setup` 会启动 Kafka、等待服务健康，并创建 `demo-events` Topic。然后分别在两个终端执行：
+
+```bash
+# 终端一：启动消费者
+make consume
+```
+
+```bash
+# 终端二：发送消息
+make produce MESSAGE="你好，Kafka"
+```
+
+常用的其他命令：
+
+```bash
+make describe                         # 查看 Topic 信息
+make ps                               # 查看 Kafka 容器状态
+make logs                             # 查看 Kafka 日志
+make produce MESSAGE="hello kafka"   # 发送自定义消息
+make frontend-build                  # 构建 React 前端
+make down                             # 停止并删除 Kafka 容器
+```
+
+默认参数也可以覆盖，例如使用新的消费者组重新读取旧消息：
+
+```bash
+make consume GROUP="demo-kafka-consumer-$(date +%s)"
+```
+
+### FastAPI + React 页面
+
+这个版本把 Kafka 操作封装成 HTTP 接口，React 只需要调用 FastAPI，不需要在浏览器中直接连接 Kafka。
+
+先在第一个终端启动 Kafka 和 FastAPI：
+
+```bash
+cd demo-kafka
+make api
+```
+
+`make api` 会自动启动 Kafka、等待服务健康、创建 `demo-events` Topic，然后启动监听 http://localhost:8000 的 FastAPI 服务。开发模式下修改 backend/main.py 会自动重载。
+
+再开第二个终端启动 React：
+
+```bash
+cd demo-kafka
+make frontend-install  # 第一次运行时执行
+make frontend-dev
+```
+
+打开 http://localhost:5173，即可使用页面发送消息和查看最近消息。Vite 会把前端的 /api 请求代理到 FastAPI 的 8000 端口。
+
+如果本机的 8000 端口已被其他服务占用，可以同时覆盖后端端口和前端代理目标：
+
+```bash
+# 终端一
+make api API_PORT=8001
+
+# 终端二
+make frontend-dev API_PORT=8001
+```
+
+#### HTTP 接口
+
+| 方法 | 路径 | 作用 |
+| --- | --- | --- |
+| GET | /api/health | 检查 FastAPI、Kafka 和 Topic 是否可用 |
+| POST | /api/messages | 将一条消息写入 demo-events |
+| GET | /api/messages?limit=20 | 读取 Topic 最近的消息，不提交消费者组 offset |
+
+发送消息的请求体：
+
+```json
+{
+  "key": "greeting",
+  "message": "你好，Kafka"
+}
+```
+
+也可以不用 React，直接调用 HTTP 接口：
+
+```bash
+curl http://localhost:8000/api/health
+
+curl http://localhost:8000/api/messages?limit=20
+
+curl -X POST http://localhost:8000/api/messages \
+  -H "Content-Type: application/json" \
+  -d '{"key":"greeting","message":"hello from curl"}'
+```
+
+后端默认允许 http://localhost:5173 和 http://127.0.0.1:5173 跨域访问，也可以通过 CORS_ORIGINS 环境变量传入逗号分隔的来源列表。
+
+### 手动运行 Python 命令行 Demo
+
+#### 1. 启动 Kafka
 
 ```bash
 cd demo-kafka
@@ -70,7 +186,7 @@ docker compose up -d --wait
 
 官方 `apache/kafka` 镜像默认使用单节点 KRaft 配置，并将客户端端口映射到本机的 `9092`。
 
-### 2. 创建 Topic
+#### 2. 创建 Topic
 
 在 `demo-kafka` 目录执行：
 
@@ -95,7 +211,7 @@ docker compose exec kafka \
   --bootstrap-server localhost:9092
 ```
 
-### 3. 启动消费者
+#### 3. 启动消费者
 
 保持第一个终端运行，在项目根目录另开一个终端：
 
@@ -105,7 +221,7 @@ uv run python demo-kafka/consumer.py
 
 消费者会等待最多 30 秒，读到第一条消息后打印消息内容、Partition 和 offset，然后退出。
 
-### 4. 发送消息
+#### 4. 发送消息
 
 再开一个终端，在项目根目录执行：
 
@@ -125,7 +241,7 @@ uv run python demo-kafka/producer.py
 uv run --project .. python producer.py --message "hello kafka"
 ```
 
-### 5. 重复观察旧消息
+#### 5. 重复观察旧消息
 
 消费者组会保存读取进度。若使用默认的 `demo-kafka-consumer` 组再次运行，已经提交过 offset 的旧消息不会重复读取。想重新从最早消息开始观察，可以换一个新的消费者组：
 
@@ -164,6 +280,24 @@ value=你好，Kafka
 
 ## 常见问题
 
+### make api 报 NoBrokersAvailable
+
+请先确认 Docker 正常运行，并执行：
+
+```bash
+make setup
+make ps
+```
+
+如果 Kafka 容器不是 Healthy 状态，可以执行 make logs 查看启动日志。
+
+### npm: command not found
+
+说明本机还没有安装 Node.js/npm。安装后在 demo-kafka 目录执行 make frontend-install，再执行 make frontend-dev。
+
+### 页面显示“等待后端连接”
+
+请确认第一个终端中的 make api 仍在运行，并访问 http://localhost:5173。如果直接修改了前端端口，需要同步修改 frontend/vite.config.js 中的代理目标或后端的 CORS_ORIGINS。
 ### `Connection refused` 或 `NoBrokersAvailable`
 
 Kafka 可能还没有完成启动。检查容器状态和日志：
