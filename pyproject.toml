@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "redis>=5.0,<7.0",
+    "kafka-python>=2.0.2,<3.0",
     "fastapi==0.115.6",
     "uvicorn[standard]==0.34.0",
     "sqlalchemy==2.0.36",
