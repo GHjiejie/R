@@ -242,14 +242,18 @@ def get_user_from_cache(user_id: int):
 
 
 @app.post("/cache/warm-batch")
-def warm_batch(start: int = 1, end: int = 200, jitter: bool = True, db: Session = Depends(get_db)):
+def warm_batch(
+    start: int = 1, end: int = 200, jitter: bool = True, db: Session = Depends(get_db)
+):
     """批量预热 [start, end] 范围内的用户缓存。
 
     jitter=true（默认）：每个键的 TTL = CACHE_TTL + 随机扰动，错峰过期（防雪崩）。
     jitter=false：所有键使用统一 TTL，同时过期（雪崩对照组，危险！仅演示）。
     """
     if end < start or end - start > 5000:
-        raise HTTPException(status_code=400, detail="范围不合法：end >= start 且跨度不超过 5000")
+        raise HTTPException(
+            status_code=400, detail="范围不合法：end >= start 且跨度不超过 5000"
+        )
     users = db.query(User).filter(User.id >= start, User.id <= end).all()
     ttls = []
     for u in users:

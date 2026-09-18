@@ -1,0 +1,60 @@
+<title>Clash 切换到天悦云订阅后 cc-switch 的 k3 连不上：原因与修复</title>
+<h1 seq="auto">结论</h1>
+<p>切换到<strong>天悦云</strong>订阅后，cc-switch 里的 <strong>k3</strong> 连不上，根本原因是：天悦云订阅把 <code>token.qianshi.cn</code> 的 DNS 解析成了 <strong>fake-ip（假 IP）</strong>，而不是内网真实地址 <code>10.166.81.8</code>，导致连接失败。</p>
+<p>k3 的后端是内网服务 <code>https://token.qianshi.cn/v1/responses</code>（真实 IP <code>10.166.81.8</code>），必须直连并解析到真实 IP 才能连通。</p>
+<callout emoji="✅" background-color="light-green" border-color="green"><p><strong>一句话修复：</strong>给天悦云订阅补上内网 hosts 映射 + qianshi.cn 直连规则 + 把 qianshi.cn 加入 fake-ip-filter（详见「修复步骤」）。</p></callout>
+<h1 seq="auto">现象与证据</h1>
+<p>cc-switch 日志（<code>~/.cc-switch/logs/cc-switch.log</code>）中，k3 的请求全部失败：</p>
+<pre lang="text" caption="cc-switch.log 中的报错"><code>请求 URL: https://token.qianshi.cn/v1/responses (model=k3)
+[FWD-003] Provider k3 请求失败: 请求转发失败: 连接失败:
+error sending request for url (https://token.qianshi.cn/v1/responses)</code></pre>
+<p>系统层面对该域名的正确解析结果（真实内网 IP）：</p>
+<pre lang="text" caption="dscacheutil 查询结果"><code>$ dscacheutil -q host -a name token.qianshi.cn
+name: token.qianshi.cn
+ip_address: 10.166.81.8</code></pre>
+<h1 seq="auto">两个订阅的关键差异</h1>
+<p>蓝胖云通过它的 merge 文件补齐了内网配置，而天悦云挂的 merge 文件是空模板，因此缺少这些配置。</p>
+<table>
+<colgroup><col width="180"/><col /><col /></colgroup>
+<thead><tr>
+<th background-color="light-gray"><p>配置项</p></th>
+<th background-color="light-gray"><p>蓝胖云（能用）</p></th>
+<th background-color="light-gray"><p>天悦云（连不上）</p></th>
+</tr></thead>
+<tbody>
+<tr><td><p>merge 文件</p></td><td><p>mTu2GFk8cHOO.yaml（有内容）</p></td><td><p>mxb6KRPfFvsA.yaml（空模板）</p></td></tr>
+<tr><td><p>hosts 内网映射</p></td><td><p>token.qianshi.cn: 10.166.81.8 ✅</p></td><td><p>无 ❌</p></td></tr>
+<tr><td><p>qianshi.cn 直连规则</p></td><td><p>DOMAIN-SUFFIX,qianshi.cn,DIRECT ✅</p></td><td><p>无 ❌</p></td></tr>
+<tr><td><p>DNS 模式</p></td><td><p>普通（走 nameserver-policy）</p></td><td><p>fake-ip（198.18.0.1/16）</p></td></tr>
+<tr><td><p>qianshi.cn 在 fake-ip-filter</p></td><td><p>—（非 fake-ip 模式，不需要）</p></td><td><p>无 ❌</p></td></tr>
+</tbody>
+</table>
+<h1 seq="auto">为什么天悦云下会失败</h1>
+<p>天悦云订阅开启了 <code>enhanced-mode: fake-ip</code>，但 <code>fake-ip-filter</code> 里没有 <code>qianshi.cn</code> / <code>token.qianshi.cn</code>。于是请求链路变成：</p>
+<ol>
+<li>cc-switch 要连 <code>token.qianshi.cn</code>，走系统代理到 Clash；</li>
+<li>Clash 对它返回一个假 IP（<code>198.18.x.x</code>），而不是 <code>10.166.81.8</code>；</li>
+<li>由于没有 hosts 映射、也没有直连规则兜底拿到真实内网 IP，连接被指向假地址 → 连接失败。</li>
+</ol>
+<h1 seq="auto">修复步骤</h1>
+<p>在 Clash Verge 中给<strong>天悦云</strong>订阅补上对应配置（它当前的 merge 为空）。</p>
+<h2 seq="auto">方式一：修改天悦云的 merge 文件</h2>
+<p>打开天悦云订阅右侧的 merge（<code>mxb6KRPfFvsA</code>），填入以下内容：</p>
+<pre lang="yaml" caption="天悦云 merge 需补充的内容"><code>hosts:
+  token.qianshi.cn: 10.166.81.8
+dns:
+  fake-ip-filter:
+    - '+.qianshi.cn'
+    - 'token.qianshi.cn'
+rules:
+  - 'DOMAIN-SUFFIX,qianshi.cn,DIRECT'
+  - 'IP-CIDR,10.166.81.8/32,DIRECT,no-resolve'</code></pre>
+<h2 seq="auto">方式二：复用蓝胖云的配置（更省事）</h2>
+<p>把天悦云的 merge / rules 直接指向蓝胖云那套（merge <code>mTu2GFk8cHOO</code>、rules <code>rbpaSvqWRPEx</code>），或在 Clash Verge 的「全局扩展配置」里统一加上面的 hosts / 直连规则 / fake-ip-filter，这样换任何订阅都不影响 k3。</p>
+<p>改完后在 Clash Verge 里<strong>重新应用该订阅</strong>即可生效。</p>
+<h1 seq="auto">注意事项</h1>
+<ul>
+<li>修改后务必在 Clash Verge 中重新应用（激活）该订阅，配置才会进入运行时。</li>
+<li>若 k3 后端内网 IP 变化，需同步更新 hosts 中的 <code>10.166.81.8</code>。</li>
+<li>全局扩展配置与单个订阅的 merge 同时存在时，注意规则顺序与覆盖关系，避免直连规则被订阅自带规则覆盖。</li>
+</ul>

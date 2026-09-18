@@ -1,0 +1,1 @@
+{"audience":"自己/使用 Clash Verge + cc-switch 的技术用户","reader_task":"理解为何天悦云订阅下 cc-switch 的 k3 连不上，并按步骤修复","genre_contract":"router.knowledge","adapter":null,"presentation_mode":"normal","visual_plan":{"reason":"用对比表格呈现两个订阅配置差异，用代码块给出可执行修复配置，因果链用文字即可清晰表达","blocks":[]}}
