@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     CACHE_TTL: int = 60
     NULL_CACHE_TTL: int = 30  # 空值缓存 TTL（防缓存穿透），建议短于正常缓存
     CACHE_TTL_JITTER: int = 30  # TTL 随机扰动上限（秒，防缓存雪崩：错峰过期）
+    CORS_ORIGINS: list[str] = ["http://localhost:5173"]  # 允许的前端来源（逗号分隔可配多个）
 
     class Config:
         env_file = ".env"
