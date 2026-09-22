@@ -1,0 +1,26 @@
+[project]
+name = "kafka-architecture-lab"
+version = "1.0.0"
+description = "真实 Kafka 架构实验台：Python API 与消费者"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.12",
+  "uvicorn[standard]==0.34.2",
+  "confluent-kafka==2.15.1",
+  "pydantic-settings==2.9.1",
+]
+
+[dependency-groups]
+dev = ["pytest==8.3.5", "httpx==0.28.1", "ruff==0.11.9"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+markers = ["integration: 真实 Kafka 集群验收，显式设置 LAB_INTEGRATION=1"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

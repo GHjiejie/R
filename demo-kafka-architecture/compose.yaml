@@ -1,0 +1,227 @@
+name: kafka-kraft-lab
+x-kafka-common: &common
+  CLUSTER_ID: YWJjZGVmZ2hpamtsbW5vcA
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 101@controller-1:9093,102@controller-2:9093,103@controller-3:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+services:
+  controller-1:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.2}
+    hostname: controller-1
+    restart: unless-stopped
+    ports: ["127.0.0.1:19095:9093"]
+    environment:
+      <<: *common
+      KAFKA_NODE_ID: 101
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
+    volumes: ["controller1-data:/var/lib/kafka/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9093'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    mem_limit: 768m
+  controller-2:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.2}
+    hostname: controller-2
+    restart: unless-stopped
+    ports: ["127.0.0.1:19096:9093"]
+    environment:
+      <<: *common
+      KAFKA_NODE_ID: 102
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
+    volumes: ["controller2-data:/var/lib/kafka/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9093'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    mem_limit: 768m
+  controller-3:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.2}
+    hostname: controller-3
+    restart: unless-stopped
+    ports: ["127.0.0.1:19097:9093"]
+    environment:
+      <<: *common
+      KAFKA_NODE_ID: 103
+      KAFKA_PROCESS_ROLES: controller
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT
+    volumes: ["controller3-data:/var/lib/kafka/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9093'"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    mem_limit: 768m
+  broker-1:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.2}
+    hostname: broker-1
+    restart: unless-stopped
+    depends_on:
+      controller-1: {condition: service_healthy}
+      controller-2: {condition: service_healthy}
+      controller-3: {condition: service_healthy}
+    ports: ["127.0.0.1:19092:9092"]
+    environment:
+      <<: *common
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker-1:29092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 6
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 1000
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_SEGMENT_BYTES: 1048576
+      KAFKA_LOG_ROLL_MS: 60000
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 30000
+    volumes: ["broker1-data:/var/lib/kafka/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 > /dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 18
+    mem_limit: 1g
+  broker-2:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.2}
+    hostname: broker-2
+    restart: unless-stopped
+    depends_on:
+      controller-1: {condition: service_healthy}
+      controller-2: {condition: service_healthy}
+      controller-3: {condition: service_healthy}
+    ports: ["127.0.0.1:19093:9092"]
+    environment:
+      <<: *common
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker-2:29092,EXTERNAL://localhost:19093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 6
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 1000
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_SEGMENT_BYTES: 1048576
+      KAFKA_LOG_ROLL_MS: 60000
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 30000
+    volumes: ["broker2-data:/var/lib/kafka/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 > /dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 18
+    mem_limit: 1g
+  broker-3:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.2}
+    hostname: broker-3
+    restart: unless-stopped
+    depends_on:
+      controller-1: {condition: service_healthy}
+      controller-2: {condition: service_healthy}
+      controller-3: {condition: service_healthy}
+    ports: ["127.0.0.1:19094:9092"]
+    environment:
+      <<: *common
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker-3:29092,EXTERNAL://localhost:19094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: 6
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_UNCLEAN_LEADER_ELECTION_ENABLE: "false"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 1000
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_SEGMENT_BYTES: 1048576
+      KAFKA_LOG_ROLL_MS: 60000
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 30000
+    volumes: ["broker3-data:/var/lib/kafka/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 > /dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 18
+    mem_limit: 1g
+  quorum-observer:
+    image: ${KAFKA_IMAGE:-apache/kafka:4.1.2}
+    user: "0:0"
+    entrypoint: ["/bin/bash", "/lab/observe-quorum.sh"]
+    restart: unless-stopped
+    depends_on:
+      controller-1: {condition: service_healthy}
+      controller-2: {condition: service_healthy}
+      controller-3: {condition: service_healthy}
+    environment:
+      KAFKA_HEAP_OPTS: -Xms64m -Xmx128m
+    volumes:
+      - ./scripts/observe-quorum.sh:/lab/observe-quorum.sh:ro
+      - observations:/observations
+    mem_limit: 384m
+  api:
+    build: ./backend
+    restart: unless-stopped
+    ports: ["127.0.0.1:${API_PORT:-8088}:8088"]
+    depends_on:
+      broker-1: {condition: service_healthy}
+      broker-2: {condition: service_healthy}
+      broker-3: {condition: service_healthy}
+    environment:
+      LAB_BOOTSTRAP_SERVERS: broker-1:29092,broker-2:29092,broker-3:29092
+      LAB_CONTROLLER_HOSTS: controller-1:9093,controller-2:9093,controller-3:9093
+      LAB_DATABASE_PATH: /data/lab.db
+    volumes:
+      - app-data:/data
+      - observations:/observations:ro
+      - broker1-data:/broker-data/1:ro
+      - broker2-data:/broker-data/2:ro
+      - broker3-data:/broker-data/3:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 512m
+  web:
+    build: ./frontend
+    ports: ["127.0.0.1:${WEB_PORT:-5188}:80"]
+    depends_on:
+      api: {condition: service_healthy}
+    mem_limit: 128m
+volumes:
+  app-data:
+  observations:
+  controller1-data:
+  broker1-data:
+  controller2-data:
+  broker2-data:
+  controller3-data:
+  broker3-data:
