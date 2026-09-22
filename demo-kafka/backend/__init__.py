@@ -1,1 +1,0 @@
-"""Kafka Demo FastAPI backend."""
