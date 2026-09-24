@@ -54,8 +54,31 @@ def set_cached_user(user_id: int, user_dict: dict, jitter: bool = True) -> int:
     ttl = settings.CACHE_TTL
     if jitter:
         ttl += random.randint(0, settings.CACHE_TTL_JITTER)
-    redis_client.setex(user_key(user_id), ttl, json.dumps(user_dict))
+    redis_client.setex(user_key(user_id), ttl, json.dumps(user_dict, ensure_ascii=False))
     return ttl
+
+
+def set_cached_users(
+    users: list[dict], jitter: bool = True
+) -> list[int]:
+    """通过单次 pipeline 批量写入用户缓存，并返回每个键的实际 TTL。"""
+    if not users:
+        return []
+
+    ttls = [
+        settings.CACHE_TTL
+        + (random.randint(0, settings.CACHE_TTL_JITTER) if jitter else 0)
+        for _ in users
+    ]
+    with redis_client.pipeline(transaction=False) as pipe:
+        for user, ttl in zip(users, ttls):
+            pipe.setex(
+                user_key(user["id"]),
+                ttl,
+                json.dumps(user, ensure_ascii=False),
+            )
+        pipe.execute()
+    return ttls
 
 
 def set_null_cache(user_id: int) -> None:

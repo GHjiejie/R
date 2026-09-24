@@ -26,6 +26,8 @@ Cache-Aside 模式、缓存穿透防护（Cache Null）与缓存雪崩防护（T
 - **数据一致性**：先更新数据库再删除缓存
 - **键命名规范**：`user:{id}` 冒号分隔的层级命名
 - **性能对比**：同一数据分别走"直连数据库"与"Redis 缓存"两条路径，量化延迟差异
+- **批量预热优化**：`/cache/warm-batch` 使用 Redis pipeline 批量写入，减少逐键网络往返；每个键仍单独生成 TTL 抖动
+- **种子数据补齐**：服务启动时只插入缺失的 `1~10000` 用户 ID，不重复覆盖已有用户；多 worker 启动时通过 PostgreSQL 事务锁串行检查，并同步自增序列
 
 ## 目录与关键文件
 
@@ -138,6 +140,8 @@ npm run dev        # http://localhost:5173
    分别对应"直连数据库"、"缓存无防护"与"缓存 + 防穿透"三条路径；
    `/cache/warm-batch`、`/cache/ttl-distribution`、`/cache/all`
    用于雪崩演示与缓存重置。
+
+   `/cache/ttl-distribution` 的 `limit` 参数限制在 `1~10000`，默认扫描最多 2000 个键，避免请求无界遍历 Redis 缓存空间。
 
 ## 清理方式
 

@@ -16,11 +16,12 @@ import random
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from . import cache
 from .config import settings
@@ -28,30 +29,52 @@ from .database import Base, SessionLocal, engine, get_db
 from .models import User
 from .schemas import UserCreate, UserOut
 
-Base.metadata.create_all(bind=engine)
+SEED_COUNT = 10000
+_first_names = [
+    "伟", "芳", "娜", "敏", "静", "磊", "洋", "勇",
+    "杰", "涛", "明", "超", "秀英", "霞", "平", "刚",
+]
+_last_names = [
+    "王", "李", "张", "刘", "陈", "杨", "赵", "黄",
+    "周", "吴", "徐", "孙", "胡", "朱", "高", "林",
+]
+
+
+def seed_users(db: Session) -> None:
+    """补齐缺失的演示用户，不重写已有数据，并同步 PostgreSQL 自增序列。"""
+    # 多个 worker 同时启动时串行执行种子检查，避免重复生成同一批数据。
+    db.execute(text("SELECT pg_advisory_xact_lock(72401931)"))
+    existing_ids = set(db.scalars(select(User.id).where(User.id <= SEED_COUNT)))
+
+    for start in range(1, SEED_COUNT + 1, 1000):
+        rows = [
+            {
+                "id": user_id,
+                "name": random.choice(_last_names) + random.choice(_first_names),
+                "email": f"user{user_id}@example.com",
+            }
+            for user_id in range(start, min(start + 1000, SEED_COUNT + 1))
+            if user_id not in existing_ids
+        ]
+        if rows:
+            db.execute(pg_insert(User).values(rows).on_conflict_do_nothing())
+
+    db.execute(
+        text(
+            "SELECT setval(pg_get_serial_sequence('users', 'id'), "
+            "GREATEST(COALESCE((SELECT MAX(id) FROM users), 1), 1), "
+            "EXISTS (SELECT 1 FROM users))"
+        )
+    )
+    db.commit()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """启动时向数据库写入种子数据（默认 10000 条）。"""
+    """启动时创建表结构，并补齐默认的 10000 条种子数据。"""
+    Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
-        count = db.scalar(select(func.count(User.id)))
-        if not count or count < SEED_COUNT:
-            batch = []
-            for i in range(1, SEED_COUNT + 1):
-                batch.append(
-                    User(
-                        name=random.choice(_last_names) + random.choice(_first_names),
-                        email=f"user{i}@example.com",
-                    )
-                )
-                if i % 1000 == 0:
-                    db.bulk_save_objects(batch)
-                    db.commit()
-                    batch = []
-            if batch:
-                db.bulk_save_objects(batch)
-                db.commit()
+        seed_users(db)
     yield
 
 
@@ -65,45 +88,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-SEED_COUNT = 10000
-_first_names = [
-    "伟",
-    "芳",
-    "娜",
-    "敏",
-    "静",
-    "磊",
-    "洋",
-    "勇",
-    "杰",
-    "涛",
-    "明",
-    "超",
-    "秀英",
-    "霞",
-    "平",
-    "刚",
-]
-_last_names = [
-    "王",
-    "李",
-    "张",
-    "刘",
-    "陈",
-    "杨",
-    "赵",
-    "黄",
-    "周",
-    "吴",
-    "徐",
-    "孙",
-    "胡",
-    "朱",
-    "高",
-    "林",
-]
-
 
 @app.get("/health")
 def health():
@@ -244,13 +228,13 @@ def warm_batch(
         raise HTTPException(
             status_code=400, detail="范围不合法：end >= start 且跨度不超过 5000"
         )
-    users = db.query(User).filter(User.id >= start, User.id <= end).all()
-    ttls = []
-    for u in users:
-        ttl = cache.set_cached_user(
-            u.id, {"id": u.id, "name": u.name, "email": u.email}, jitter=jitter
-        )
-        ttls.append(ttl)
+    users = db.scalars(
+        select(User).where(User.id >= start, User.id <= end).order_by(User.id)
+    ).all()
+    ttls = cache.set_cached_users(
+        [{"id": u.id, "name": u.name, "email": u.email} for u in users],
+        jitter=jitter,
+    )
     return {
         "warmed": len(users),
         "jitter": jitter,
@@ -263,13 +247,14 @@ def warm_batch(
 
 
 @app.get("/cache/ttl-distribution")
-def ttl_distribution(limit: int = 2000):
+def ttl_distribution(limit: int = Query(default=2000, ge=1, le=10000)):
     """统计当前 user:* 缓存键的 TTL 分布（每秒一个桶），用于观察雪崩风险。"""
     cursor = 0
     buckets = {}
     scanned = 0
     while True:
         cursor, keys = cache.redis_client.scan(cursor=cursor, match="user:*", count=500)
+        keys = keys[: max(limit - scanned, 0)]
         if keys:
             # 用 pipeline 批量取 TTL，避免逐键往返（N+1）
             with cache.redis_client.pipeline() as pipe:
