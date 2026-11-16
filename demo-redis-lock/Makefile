@@ -13,7 +13,7 @@ ARGS        ?=
 export REDIS_URL
 
 .DEFAULT_GOAL := run
-.PHONY: run demo help sync redis-up redis-ping redis-stop
+.PHONY: run demo test help sync redis-up redis-ping redis-stop
 
 run: sync
 	@if [ "$(START_REDIS)" = "1" ]; then \
@@ -31,6 +31,9 @@ run: sync
 	@$(UV) run python "$(SCRIPT)" --redis-url "$(REDIS_URL)" $(ARGS)
 
 demo: run
+
+test: sync
+	@$(UV) run python "$(CURDIR)/test_manual_release.py"
 
 sync:
 	@$(UV) sync
@@ -58,11 +61,13 @@ redis-stop:
 	@$(DOCKER_COMPOSE) stop redis
 
 help:
-	@echo "Redis 分布式锁 Demo"
+	@echo "服务 A、B、C 争抢 Redis 锁，通过 HTTP 接口人工释放"
 	@echo ""
 	@echo "常用命令："
-	@echo "  make                                             启动 Redis 并运行 Demo"
-	@echo "  make run ARGS=\"--workers 8 --lock-ttl 5\"       传递脚本参数"
+	@echo "  make                                             启动服务，等待人工通过接口释放锁"
+	@echo "  make run ARGS=\"--api-port 8011\"                 修改接口端口，默认 8010"
+	@echo "  make run ARGS=\"--auto-release --wait-timeout 0\"  自动释放对照例子"
+	@echo "  make test                                        验证 HTTP 释放、续期和锁交接（需 Redis）"
 	@echo "  make run START_REDIS=0 REDIS_URL=...             使用已有 Redis"
 	@echo "  make redis-stop                                  停止仓库启动的 Redis"
 	@echo "  make help                                        查看帮助"

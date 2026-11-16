@@ -1,197 +1,287 @@
-# Redis 分布式锁 Demo
+# 服务 A、B、C 争抢 Redis 锁，通过接口人工释放
 
 ## Demo 目的
 
-使用多个 Python 进程竞争同一个 Redis Key，观察 Redis 分布式锁的互斥效果，并演示基础实现中必须处理的安全点：
+用三个独立 Python 进程模拟服务 A、B、C。三个服务争抢同一把 Redis 锁，成功者操作共享资源，处理完成后继续持锁，必须由人调用 HTTP 接口释放，其他等待服务才能接棒。
 
-- 使用 `SET key token NX EX seconds` 原子加锁；
-- 使用唯一 token 标识锁的持有者；
-- 使用 Lua 脚本原子完成“校验 token + 删除锁”；
-- 使用 TTL 避免持锁进程异常退出后留下永久锁；
-- 演示锁 TTL 小于临界区执行时间时的风险。
+默认行为：
 
-本 Demo 面向单个 Redis 实例的学习场景，不是支付、库存等关键业务的完整一致性方案。
+1. 三个服务一起竞争，一个服务获得锁，其他服务持续等待。
+2. 持有者读取共享计数器，模拟处理，再把值加一写回。
+3. 持有者继续校验 token 并续期，等待人工释放；资源不会继续递增。
+4. 人工查看状态，复制本次 token，再调用释放接口。
+5. 释放后，下一个等待服务获得锁，重复上述过程。
+6. 三个服务都完成并人工释放后，接口仍保持运行，便于查看最终结果。
+
+```mermaid
+flowchart LR
+    A[服务 A] --> L[争抢同一把 Redis 锁]
+    B[服务 B] --> L
+    C[服务 C] --> L
+    L -->|成功| R[共享计数器加一]
+    L -->|失败| W[等待重试]
+    R --> H[处理完成，继续持锁并续期]
+    U[人工查看状态并提交 token] --> P[POST /lock/release]
+    H --> P
+    P -->|校验 token 与完成状态| D[删除当前锁]
+    D --> W
+    W --> L
+```
 
 ## 涉及的 Redis 知识点
 
-- `SET ... NX EX`：Key 不存在时创建，并同时设置自动过期时间；
-- 唯一 token：避免一个进程删除另一个进程持有的锁；
-- Lua 脚本：让比较 token 和删除 Key 在 Redis 中原子执行；
-- 锁 TTL：进程崩溃时自动释放锁；
-- 临界区：同一时刻只允许一个进程执行的业务代码；
-- 锁过期风险：业务执行超过 TTL 后，其他进程可能重新获得同一把锁。
+- `SET key token NX EX seconds`：原子加锁与设置租约。
+- 唯一 token：区分不同服务、不同次加锁。
+- Lua 续期：仅为仍属于本次 token 的锁执行 `PEXPIRE`。
+- Lua 人工释放：原子检查所有权、业务完成状态，再删除锁并记录释放结果。
+- 共享资源与临界区：锁 Key 保存资格，资源 Key 保存业务数据。
+- TTL 兜底：持有者异常退出并停止续期后，锁自然过期。
 
-## 目录说明
+共享资源是一个初始值为 `0` 的 Redis String，使用 `GET → 模拟处理 → SET` 展示需要锁保护的多步业务。统计用的 `INCR`、`HINCRBY` 只用于观察结果。
 
-```text
-demo-redis-lock/
-├── distributed_lock.py  # 锁实现、并发 Worker 和运行结果统计
-├── Makefile             # 依赖同步、Redis 启动和 Demo 运行命令
-└── README.md            # 使用说明
-```
+手动模式在模拟处理期间和等待人工释放期间都会续期。续期依赖进程正常运行及 Redis 可用；进程长时间暂停、网络中断等故障仍可能导致租约丢失。这个学习示例不代替业务幂等、数据库约束或 fencing token。
 
-项目根目录的 `pyproject.toml` 提供 `redis-py` 依赖。本 Demo 复用 `demo-install-redis/` 中的 Redis 配置。
+## 目录或关键文件说明
+
+| 文件 | 说明 |
+| --- | --- |
+| `distributed_lock.py` | 启动服务 A/B/C、竞争锁、操作资源和续期 |
+| `manual_release_api.py` | 状态接口、人工释放接口、Lua 原子校验与状态快照 |
+| `test_manual_release.py` | 使用真实 Redis 和 HTTP 验证续期、人工交接、并发释放与异常退出 |
+| `Makefile` | 同步依赖、检查或启动 Redis、运行 Demo 与测试 |
+| `../demo-install-redis/docker-compose.yml` | 复用的 Redis 配置 |
+| `../pyproject.toml`、`../uv.lock` | `redis-py`、FastAPI、Uvicorn 等现有依赖 |
 
 ## 运行前置条件
 
-- 已安装 Python 3.9 或更高版本；
-- 已安装 `uv` 和 `make`；
-- 已安装 Docker 与 Docker Compose，或者已有可访问的 Redis 服务。
+- Python 3.9 或更高版本、`uv`；使用 Makefile 时还需要 `make`。
+- 已有 Redis，或安装了 Docker 与 Docker Compose。
+- 默认 HTTP 端口 `8010` 可用。
+- 使用浏览器的 Swagger 页面，或使用 `curl` 调用接口。
 
-如果使用仓库内的 Redis，先启动：
+以下命令均在项目根目录执行。
 
-```bash
-cd demo-install-redis
-docker compose up -d redis
-cd ..
-```
+## 启动或运行方式
 
-检查 Redis：
-
-```bash
-docker compose -f demo-install-redis/docker-compose.yml exec redis redis-cli ping
-# PONG
-```
-
-## 启动方式
-
-### 使用 Makefile
-
-进入 Demo 目录后执行：
-
-```bash
-cd demo-redis-lock
-make
-```
-
-Makefile 会同步项目依赖，检查 `REDIS_URL` 是否可用；如果不可用，则启动仓库内的 Redis，再运行多个进程竞争锁。
-
-也可以在项目根目录执行：
+### 终端一：启动人工释放 Demo
 
 ```bash
 make -C demo-redis-lock
 ```
 
-常用参数通过 `ARGS` 传入：
+Makefile 会同步依赖，检查 `REDIS_URL`；Redis 不可用时启动仓库自带的 Redis，然后启动三个服务进程和 HTTP 接口。
 
-```bash
-make run ARGS="--workers 8 --hold-seconds 1 --wait-timeout 15 --lock-ttl 5"
-```
-
-连接已有 Redis 时：
-
-```bash
-make run START_REDIS=0 REDIS_URL=redis://localhost:6380/0
-```
-
-停止由 Makefile 启动的 Redis：
-
-```bash
-make redis-stop
-```
-
-### 手动运行
-
-在项目根目录执行：
+已有 Redis 时也可以直接运行：
 
 ```bash
 uv run python demo-redis-lock/distributed_lock.py
 ```
 
-脚本参数：
+接口默认仅监听 `127.0.0.1:8010`，用于本地学习：
+
+- Swagger 接口文档：<http://127.0.0.1:8010/docs>
+- 当前状态：<http://127.0.0.1:8010/status>
+- 健康检查：<http://127.0.0.1:8010/health>
+
+### 终端二：查看当前锁状态
+
+```bash
+curl -s http://127.0.0.1:8010/status | python3 -m json.tool
+```
+
+例如，响应中的部分字段如下：
+
+```json
+{
+  "lock": {
+    "held": true,
+    "owner": "服务A",
+    "token": "服务A-<本次UUID>",
+    "ttl_ms": 29800,
+    "release_ready": true
+  },
+  "shared_resource": {
+    "value": 1,
+    "expected_value": 1
+  },
+  "active_operations": 0,
+  "stats": {
+    "acquired": 1,
+    "manual_released": 0
+  },
+  "finished": false
+}
+```
+
+`release_ready=true` 表示业务处理已经完成，现在允许人工释放。`active_operations=0` 只代表没有正在执行资源操作，锁仍然由 `lock.owner` 持有。
+
+此时等待超过默认的 30 秒租约，正常续期下持有者仍不会改变，共享计数器也仍然是 `1`。
+
+### 人工释放当前锁
+
+从最新的 `/status` 响应复制真实的 `lock.token`，替换下面的 `<当前token>`：
+
+```bash
+curl -X POST http://127.0.0.1:8010/lock/release \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"<当前token>"}'
+```
+
+成功响应：
+
+```json
+{
+  "released": true,
+  "service": "服务A",
+  "token": "服务A-<本次UUID>"
+}
+```
+
+随后重新查看 `/status`，就会看到下一个服务竞争成功、资源更新为 `2`，并再次等待人工释放。每次都要复制新的 token；旧 token 无法释放新持有者的锁。
+
+也可以全程在 Swagger 页面操作：先执行 `GET /status`，复制 token，再执行 `POST /lock/release`。
+
+## 接口说明
+
+| 接口 | 作用 |
+| --- | --- |
+| `GET /health` | 检查 HTTP 服务与 Redis 连接 |
+| `GET /status` | 查看当前持有者、token、剩余 TTL、共享资源、统计和各服务状态 |
+| `POST /lock/release` | 提交 JSON `{"token":"..."}`，释放该 token 对应的锁 |
+
+释放接口的返回规则：
+
+| HTTP 状态码 | 含义 |
+| --- | --- |
+| `200` | 本次人工释放成功 |
+| `404` | 当前没有锁，无需释放 |
+| `409` | token 不匹配、锁已变更，或服务仍在处理资源 |
+| `422` | 请求体缺少 token，或字段格式不正确 |
+| `503` | Redis 暂不可用 |
+
+接口不允许在业务仍处于 `processing` 阶段时释放锁。所有权和 `awaiting_release` 状态的检查与删除，在同一个 Lua 脚本内完成，避免先检查、再删除之间误删新锁。
+
+各服务常见状态：`waiting` 等待锁、`processing` 处理资源、`awaiting_release` 等待人工释放、`released` 已释放。异常情况会显示 `lock_lost`、`failed` 等状态。
+
+## 参数与对照实验
 
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
-| `--workers` | `5` | 同时竞争锁的进程数 |
-| `--hold-seconds` | `1` | 每个进程持有锁并执行临界区的秒数 |
-| `--wait-timeout` | `10` | 单个进程等待锁的最长秒数 |
-| `--lock-ttl` | `5` | 锁的自动过期时间 |
+| `--services` / `--workers` | `3` | 服务实例数，前 26 个使用服务 A 至 Z，之后使用数字名称 |
+| `--hold-seconds` | `1` | 读取资源后模拟业务处理的秒数 |
+| `--wait-timeout` | 持续等待 | 首次竞争失败后的最长等待秒数；`0` 表示失败后跳过 |
+| `--lock-ttl` | `30` | 租约秒数；手动模式持续续期，进程退出后停止续期 |
+| `--api-host` | `127.0.0.1` | HTTP 监听地址 |
+| `--api-port` | `8010` | HTTP 端口 |
+| `--auto-release` | 不启用 | 对照模式：业务结束自动解锁，不续期、不启动 HTTP 接口 |
 | `--redis-url` | `REDIS_URL` 或 `redis://localhost:6379/0` | Redis 连接地址 |
 
-## 预期现象
+端口被占用时：
 
-正常运行时，多个进程会依次获得锁：
-
-```text
-Worker 2 获取锁成功，等待 0.00s，进入临界区（当前并发数=1）
-Worker 2 退出临界区并安全释放锁
-Worker 1 获取锁成功，等待 1.01s，进入临界区（当前并发数=1）
-...
-=== 运行结果 ===
-成功获取锁：5
-临界区重叠次数：0
-安全释放锁：5
+```bash
+make -C demo-redis-lock run ARGS="--api-port 8011"
 ```
 
-重点观察：
+连接其他 Redis：
 
-- 同一时刻的“当前并发数”通常为 `1`；
-- `临界区重叠次数` 通常为 `0`；
-- `安全释放锁` 应与成功获取锁的数量一致；
-- 结果 Hash 会保留约 5 分钟，便于使用 `redis-cli` 检查。
+```bash
+make -C demo-redis-lock run START_REDIS=0 REDIS_URL=redis://localhost:6380/0
+```
 
-## 演示 TTL 过短的风险
+恢复自动释放、每个服务只抢一次的对照例子：
 
-让临界区执行 4 秒，但锁只存活 1 秒：
+```bash
+make -C demo-redis-lock run ARGS="--auto-release --wait-timeout 0"
+```
+
+自动释放、等待重试：
+
+```bash
+make -C demo-redis-lock run ARGS="--auto-release --wait-timeout 10"
+```
+
+演示不续期时 TTL 过短导致的并发覆盖：
 
 ```bash
 uv run python demo-redis-lock/distributed_lock.py \
-  --workers 3 \
-  --hold-seconds 4 \
-  --wait-timeout 12 \
-  --lock-ttl 1
+  --auto-release --services 3 --hold-seconds 4 --wait-timeout 12 --lock-ttl 1
 ```
 
-可能观察到：
+## 预期输出或可观察现象
 
-- 前一个进程仍未执行完，锁已经自动过期；
-- 后一个进程重新获得同一个锁；
-- “当前并发数”大于 `1`，`临界区重叠次数` 增加；
-- 旧进程释放锁时提示锁已过期或不再属于当前进程。
+默认运行时可能看到：
 
-生产环境中应让 TTL 覆盖正常执行时间。执行时间不可预测时，需要续期机制；库存、支付、账户余额等关键操作还应配合数据库约束、幂等设计或 fencing token。
+```text
+服务A 抢锁成功，开始操作共享资源（当前并发数=1）
+服务B 首次抢锁失败，等待其他服务释放锁（直到人工释放）
+服务C 首次抢锁失败，等待其他服务释放锁（直到人工释放）
+服务A 完成共享资源更新：0 -> 1
+服务A 继续持锁并续期，等待人工调用 POST /lock/release
+```
 
-## 观察和清理 Redis Key
+调用释放接口后：
 
-脚本会输出本次运行的锁 Key 和结果 Key，也可以使用：
+```text
+人工通过接口释放了 服务A 的锁，其他等待服务可以继续竞争
+服务B 抢锁成功，开始操作共享资源（当前并发数=1）
+服务B 完成共享资源更新：1 -> 2
+服务B 继续持锁并续期，等待人工调用 POST /lock/release
+```
+
+实际服务顺序不固定。完成三次操作、三次人工释放后，`finished=true`、`lock.held=false`，共享资源实际值和预期值都为 `3`，`manual_released=3`，`overlap=0`。
+
+## 验证方式
+
+Redis 已启动后运行：
 
 ```bash
-redis-cli --scan --pattern 'demo:redis-lock:*'
+make -C demo-redis-lock test
 ```
 
-查看某次运行的数据：
+测试使用空闲端口和独立运行标识，验证以下行为，结束后只清理自己生成的数据：
 
-```bash
-redis-cli HGETALL 'demo:redis-lock:<运行标识>:result'
-redis-cli TTL 'demo:redis-lock:<运行标识>:result'
-redis-cli GET 'demo:redis-lock:<运行标识>:lock'
-```
+- 处理中拒绝提前释放；缺少或错误 token 不会删除锁。
+- 超过短租约时间仍保持同一持有者，证明续期有效。
+- 并发释放相同 token 只有一次成功，旧 token 不会释放新持有者的锁。
+- 三个服务通过人工接口依次交接，共享资源从 `0` 更新到 `3`。
+- 进程停止后不再续期，锁最终自然过期。
 
-结果 Key 会自动过期。若要立即清理某次运行的数据：
+## 清理方式
+
+在启动 Demo 的终端按 `Ctrl+C`，HTTP 服务和子进程会停止。停止时不会代替人工主动删除仍持有的锁；续期停止后，锁最多再存活一个租约周期。业务处理完成后应优先通过接口释放。
+
+接口运行期间保留演示数据，退出后共享资源、统计和各服务状态约 5 分钟后自动过期。每次运行使用独立 Key，重启不会复用旧锁。
+
+如果需要在退出后立即清理，从 `/status` 或日志取得本次运行标识，只删除本次运行的数据：
 
 ```bash
 redis-cli DEL \
   'demo:redis-lock:<运行标识>:lock' \
   'demo:redis-lock:<运行标识>:active' \
-  'demo:redis-lock:<运行标识>:result'
+  'demo:redis-lock:<运行标识>:result' \
+  'demo:redis-lock:<运行标识>:resource' \
+  'demo:redis-lock:<运行标识>:service:服务A' \
+  'demo:redis-lock:<运行标识>:service:服务B' \
+  'demo:redis-lock:<运行标识>:service:服务C'
 ```
 
-共享 Redis 上不要直接使用 `KEYS demo:redis-lock:*` 批量删除；清理多次运行记录时应使用 `SCAN`，并确认目标 Redis 仅用于本学习项目。
+使用更多服务时，还要清理对应的服务状态 Key；也可以直接等待过期。
+
+停止仓库启动的 Redis 并保留数据卷：
+
+```bash
+make -C demo-redis-lock redis-stop
+```
 
 ## 常见问题
 
-### 为什么不把 `SETNX` 和 `EXPIRE` 分开执行？
+- **释放返回 409**：重新查询 `/status`，确认 `release_ready=true`，并使用最新 token。
+- **共享资源已经变成 1，另外两个服务还在等待**：这是人工释放模式的预期行为，需要调用接口释放当前锁。
+- **为什么还有 TTL**：持续续期让正常流程等待人工操作，TTL 则在持有进程异常退出后兜底，避免永久锁。
+- **三次释放后程序为什么没退出**：HTTP 接口保留用于查看最终结果，按 `Ctrl+C` 结束。
+- **连接 Redis 失败**：执行 `docker compose -f demo-install-redis/docker-compose.yml up -d redis`，或设置正确的 `REDIS_URL`。
 
-如果 `SETNX` 成功后、`EXPIRE` 执行前进程崩溃，就可能留下没有过期时间的永久锁。因此应使用一条命令：
+## 参考
 
-```redis
-SET lock-key unique-token NX EX 30
-```
-
-### 为什么释放锁不能直接使用 `DEL`？
-
-当前进程的锁可能已经过期，并被另一个进程重新获得。旧进程直接 `DEL` 会误删新进程的锁，所以必须使用唯一 token，并通过 Lua 脚本原子校验后删除。
-
-### 这个 Demo 能保证生产环境的强一致性吗？
-
-不能。它展示的是单 Redis 实例上的基础分布式锁算法和 TTL 风险。生产环境还需要结合业务幂等、数据库事务或约束、故障恢复和监控告警设计。
+- [Redis 官方分布式锁说明](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/)：锁所有权、续期及故障边界。
+- [FastAPI 请求体](https://fastapi.tiangolo.com/tutorial/body/)：释放接口的 JSON 参数与文档。
